@@ -1,4 +1,7 @@
-from rest_framework import viewsets, status
+from django.utils import timezone
+from datetime import timedelta
+from django.db.models import Count, Avg
+from rest_framework import viewsets, status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -139,6 +142,50 @@ class ChatMessageViewSet(viewsets.ModelViewSet):
 class DiagnosticResultViewSet(viewsets.ModelViewSet):
     queryset = DiagnosticResult.objects.all()
     serializer_class = DiagnosticResultSerializer
+
+class AdminStatsView(APIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        today = timezone.now().date()
+        seven_days_ago = today - timedelta(days=7)
+
+        # Basic Stats
+        total_users = User.objects.count()
+        today_diagnoses = DiagnosticResult.objects.filter(created_at__date=today).count()
+        avg_confidence = DiagnosticResult.objects.aggregate(Avg('confidence'))['confidence__avg'] or 0
+        total_appointments = Appointment.objects.count()
+
+        # Historical Chart Data (Last 7 days)
+        history = DiagnosticResult.objects.filter(created_at__date__gte=seven_days_ago) \
+            .extra(select={'day': "date(created_at)"}) \
+            .values('day') \
+            .annotate(count=Count('id')) \
+            .order_by('day')
+
+        # Recent Queue
+        recent_results = DiagnosticResult.objects.all().order_by('-created_at')[:5]
+        recent_data = []
+        for r in recent_results:
+            recent_data.append({
+                'id': f"#REQ-{r.id}",
+                'user': r.user.get_full_name() or r.user.username if r.user else "ضيف",
+                'type': r.diagnosis_type,
+                'time': r.created_at.strftime("%Y-%m-%d %H:%M"),
+                'confidence': f"{r.confidence * 100:.1f}%",
+                'status': 'مكتمل'
+            })
+
+        return Response({
+            'stats': {
+                'total_users': total_users,
+                'today_diagnoses': today_diagnoses,
+                'ai_accuracy': f"{avg_confidence * 100:.1f}%",
+                'server_pressure': '28%', # Mocked system load
+            },
+            'chart_data': list(history),
+            'recent_queue': recent_data
+        })
 
 class MedicalDiagnosisView(APIView):
     parser_classes = (MultiPartParser, FormParser)
